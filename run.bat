@@ -1,0 +1,13 @@
+@echo off
+set INCLUDE_PATH=.\openblas\include
+set LIB_PATH=.\lib
+
+echo Compiling...
+gcc -O3 -march=native -funroll-loops -fopenmp -fPIC -I%INCLUDE_PATH% -c src\main.c src\nvector.c
+gcc -shared -o lib\libnvec.dll main.o nvector.o -L%LIB_PATH% -lopenblas
+
+del *.o
+echo Done.
+
+set OMP_NUM_THREADS=20
+python python/cycle_slip.py

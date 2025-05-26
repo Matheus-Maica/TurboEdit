@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <cblas.h>
 #include "nvector.h"
 
 Vector* create_vector() {
@@ -42,10 +43,46 @@ double vector_at(Vector* vector, size_t index) {
     return vector->data[index]; // Return the element at the specified index
 }
 
+void copy_from_array(Vector* vector, double* array, size_t length) {
+    if (!vector) return;
+
+    vector->data = (double*)malloc(length * sizeof(double));
+    if (!vector->data) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(1);
+    }
+
+    vector->capacity = length;
+    vector->size = length;
+
+    // Use cblas_dcopy if available
+    cblas_dcopy((int)length, array, 1, vector->data, 1);
+}
+
 size_t size(Vector* vector) {
     return vector->size; // Return the size of the vector
 }
 
 int is_empty(Vector* vector) {
     return vector->size == 0; // Return 1 if the vector is empty, 0 otherwise
+}
+
+void destroy(Vector* vector) {
+    free(vector->data);
+    free(vector);
+}
+
+void print_vector(Vector* vector) {
+    if (!vector) {
+        printf("Vector is NULL.\n");
+        return;
+    }
+
+    printf("Vector (size: %zu, capacity: %zu): [", vector->size, vector->capacity);
+    for (size_t i = 0; i < vector->size; ++i) {
+        printf("%.2f", vector->data[i]);
+        if (i < vector->size - 1)
+            printf(", ");
+    }
+    printf("]\n");
 }

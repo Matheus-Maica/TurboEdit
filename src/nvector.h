@@ -15,5 +15,8 @@ void pop_back(Vector* vector);
 double vector_at(Vector* vector, size_t index);
 size_t size(Vector* vector);
 int is_empty(Vector* vector);
+void copy_from_array(Vector* vector, double* array, size_t length);
+void destroy(Vector* vector);
+void print_vector(Vector* vector);
 
 #endif // VECTOR_H

@@ -3,7 +3,9 @@
 #include <cblas.h>
 #include <math.h>
 #include <stdbool.h>
+#include <time.h>
 #include "nvector.h"
+#include "main.h"
 
 #define C 299792458.0 // Speed of light
 #define FREQ_L1 1575.42e6 // L1 Frequency in Hz
@@ -25,8 +27,40 @@ typedef struct {
     double* b_delta;
 } MWPIRComb;
 
-double* vector_sum(const Vector* a, const Vector* b, unsigned char coeff) { // a + b or a - b
-    const size_t length = a->size;
+void print_list(double* arr, size_t size) {
+    // size_t size = sizeof(arr) / sizeof(arr[0]);
+    printf("arr (size: %zu): [", size);
+    for (size_t i = 0; i < size; ++i) {
+        printf("%.2f", arr[i]);
+        if (i < size - 1)
+            printf(", ");
+    }
+    printf("]\n");
+}
+
+double* generate_random_array(size_t N) {
+    double* array = (double*)malloc(N * sizeof(double));
+    if (!array) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(1);
+    }
+
+    for (size_t i = 0; i < N; ++i) {
+        array[i] = (double)rand() / RAND_MAX * 100.0;  // scale rand() to [0, 100)
+    }
+
+    return array;
+}
+
+double* copy_array(const double* arr, size_t length) {
+    double* new_array = (double*)malloc(length * sizeof(double));
+
+    cblas_dcopy(length, arr, 1, new_array, 1);
+
+    return new_array;
+}
+
+double* vector_sum(const double* a, const double* b, unsigned char coeff, size_t length) { // a + b or a - b
     // coeff = -1 => a - b
     // coeff = 1 => a + b
     double* result = (double*)malloc(length * sizeof(double));
@@ -36,11 +70,11 @@ double* vector_sum(const Vector* a, const Vector* b, unsigned char coeff) { // a
     }
 
     // result = a (copy a into result)
-    cblas_dcopy(length, a->data, 1, result, 1);
+    cblas_dcopy(length, a, 1, result, 1);
 
     // result = result - b → result = a - b
     // This is done by result += -1.0 * b
-    cblas_daxpy(length, coeff, b->data, 1, result, 1);
+    cblas_daxpy(length, coeff, b, 1, result, 1);
 
     return result;
 }
@@ -53,7 +87,7 @@ double* vector_mult(const Vector* a, double alpha) { // a * alpha
         exit(EXIT_FAILURE);
     }
 
-    cblas_scopy(length, a, 1, result, 1);
+    cblas_dcopy(length, a->data, 1, result, 1);
     cblas_dscal(length, alpha, result, 1);
 
     return result;
@@ -109,11 +143,8 @@ void solve_linear_system(double* A, double* b, double* x, int n) {
     free(augmented);
 }
 
-double* polynomial_fit(const double* y) {
+double* polynomial_fit(const double* y, int n, int m) {
     // Assumption: t is sequential, (t[0] = 1, t[1] = 2, t[n] = n + 1)
-    const int m = sizeof(y) / sizeof(*y);  // number of data points
-    const int degree = min(floor((m / 100 + 1)), 6); // in the original paper there is no floor() here, but it feels like there should be?
-    const int n = degree + 1;
 
     // Allocate Vandermonde matrix A: m x n
     double* A = calloc(m * n, sizeof(double));
@@ -149,7 +180,7 @@ double* linear_combination(const double* x, const double* y, double a, double b,
     }
 
     double _b = opr * b;
-    const inv_f_2 = 1 / (a + _b);
+    const double inv_f_2 = 1 / (a + _b);
 
     // result = a * x
     cblas_dcopy(length, x, 1, result, 1);      // result = x
@@ -167,10 +198,10 @@ MWPIRComb precompute_combinations(Vector* l1_phase, Vector* l2_phase, Vector* l1
 
     double* wlp = linear_combination(l1_phase->data, l2_phase->data, FREQ_L1, FREQ_L2, length, -1); // wide_lane_phase
     double* wlr = linear_combination(l1_psr->data, l2_psr->data, FREQ_L1, FREQ_L2, length, 1); // wide_lane_psr
-    double* ip = vector_sum(l1_phase, l2_phase, -1); // iono phase
-    double* ir = vector_sum(l2_psr, l1_psr, -1); // iono pseudorange
+    double* ip = vector_sum(l1_phase->data, l2_phase->data, -1, length); // iono phase
+    double* ir = vector_sum(l2_psr->data, l1_psr->data, -1, length); // iono pseudorange
 
-    double* b_delta = vector_sum(wlp, wlr, -1);
+    double* b_delta = vector_sum(wlp, wlr, -1, length);
 
     free(wlp);
     free(wlr);
@@ -182,8 +213,8 @@ MWPIRComb precompute_combinations(Vector* l1_phase, Vector* l2_phase, Vector* l1
     return result;
 }
 
-Vector* cycle_slip_detection(MWPIRComb wlio_comb) {
-    double* b_delta = wlio_comb.b_delta; // can I do this equality?
+Vector* widelane_slip_detection(MWPIRComb wlio_comb, size_t length) {
+    double* b_delta = copy_array(wlio_comb.b_delta, length);
 
     Vector* ms = create_vector();
 
@@ -192,13 +223,12 @@ Vector* cycle_slip_detection(MWPIRComb wlio_comb) {
     double running_std2 = 0.25; // 0.5^2
     bool prev_outlier = false;
     
-    const size_t length = sizeof(b_delta) / sizeof(double);
     for (int i = 1; i < length; i++) {
         double b_w = *(b_delta + i);
 
         if ((b_w - running_mean) * (b_w - running_mean) > 16 * running_std2) { // Outlier
             if(prev_outlier) { // any two consecutive outliers lying within 1 cycle
-                push_back(ms, running_mean); // Store the mean of last epoch. This is the mean for last arc.
+                push_back(ms, i - 1); // Store the mean of last epoch. This is the mean for last arc.
 
                 running_mean = b_w; // Start new arc.
                 running_std2 = 0.25;
@@ -225,43 +255,83 @@ Vector* cycle_slip_detection(MWPIRComb wlio_comb) {
     return ms;
 }
 
-double compute_polynomial_value(double* coeffs, int t) {
-    int order = sizeof(coeffs) / sizeof(*coeffs);
-
-    double accumulator = 0.0;
-    for(int i = 0; i < order; i++) {
-        accumulator += *(coeffs + i) * pow(t, i);
+// Horner's method (https://en.wikipedia.org/wiki/Horner%27s_method)
+double eval_poly(double* coeffs, int t, int order) {
+    double result = coeffs[order - 1];
+    for (int i = order - 2; i >= 0; i--) {
+        result = result * t + coeffs[i];
     }
-
-    return accumulator;
+    return result;
 }
 
-Vector* ionospheric_splip_detection(MWPIRComb wlio_comb) {
-    double* ip = wlio_comb.ip;
-    double* ir = wlio_comb.ir;
+Vector* ionospheric_splip_detection(MWPIRComb wlio_comb, size_t length) {
+    double* ip = copy_array(wlio_comb.ip, length);
+    double* ir = copy_array(wlio_comb.ir, length);
 
-    double* coeffs = polynomial_fit(ir);
-    double L_i_prev = *ip;
-    double Q_i_prev = compute_polynomial_value(coeffs, 1);
-    bool match = false;
+    const int degree = min(floor((length / 100 + 1)), 6); // in the original paper there is no floor() here, but it feels like there should be?
+    const int n = degree + 1;
 
-    size_t length = sizeof(ip) / sizeof(*ip);
-    for(int i = 1; i < length; i++) { // Start from second observation
+    double* coeffs = polynomial_fit(ir, n, length);
+
+    Vector* slips = create_vector();
+
+    for(int i = 1; i < length - 1; i++) { // Start from second observation
+        static double Q_i_prev = 0.0;
+        static double Q_i = 0.0;
+        static double Q_i_next = 0.0;
+
         double L_i = *(ip + i);
-        double Q_i = compute_polynomial_value(coeffs, i + 1);
+        double L_i_prev = *(ip + i - 1);
+        double L_i_next = *(ip + i + 1);
 
-        if((L_i - Q_i) - (L_i_prev - Q_i_prev) > 6) {
-            match = true;
+        if(i == 1) {
+            Q_i_prev = eval_poly(coeffs, i, n);
+            Q_i = eval_poly(coeffs, i + 1, n);
+            Q_i_next = eval_poly(coeffs, i + 2, n);
+        } else {
+            Q_i_prev = Q_i;
+            Q_i = Q_i_next;
+            Q_i_next = eval_poly(coeffs, i + 2, n);
         }
 
-        if((L_i - Q_i) - (L_i_prev - Q_i_prev) < 1) {
-            match = true;
+        if((L_i - Q_i) - (L_i_prev - Q_i_prev) > 6 && (L_i_next - Q_i_next) - (L_i - Q_i) < 1) {
+            push_back(slips, i - 1);
         }
     }
+
+    free(ip); free(ir);
+
+    return slips;
 }
 
-int main() {
-    
+void* find_cycle_slips(double* l1_p, double* l2_p, double* l1_r, double* l2_r, size_t length) {
+    Vector* l1_phase = create_vector();
+    Vector* l2_phase = create_vector();
+    Vector* l1_psr = create_vector();
+    Vector* l2_psr = create_vector();
 
-    return 0;
+    copy_from_array(l1_phase, l1_p, length);
+    copy_from_array(l2_phase, l2_p, length);
+    copy_from_array(l1_psr, l1_r, length);
+    copy_from_array(l2_psr, l2_r, length);
+
+    clock_t start = clock();
+    MWPIRComb obs = precompute_combinations(l1_phase, l2_phase, l1_psr, l2_psr);
+    clock_t end = clock();
+
+    printf("precompute_combinations took %.2f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
+
+    start = clock();
+    Vector* widelane_slips = widelane_slip_detection(obs, length);
+    end = clock();
+
+    printf("widelane_slip_detection took %.2f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
+
+    start = clock();
+    Vector* iono_slips = ionospheric_splip_detection(obs, length);
+    end = clock();
+
+    printf("ionospheric_splip_detection took %.2f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
+
+    destroy(l1_phase); destroy(l2_phase); destroy(l1_psr); destroy(l2_psr); free(obs.b_delta); free(obs.ip); free(obs.ir);
 }
