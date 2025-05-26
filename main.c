@@ -1,6 +1,6 @@
 #include <stdio.h>
-#include <cblas.h>
 #include <stdlib.h>
+#include <cblas.h>
 #include <math.h>
 #include <stdbool.h>
 #include "nvector.h"
@@ -8,9 +8,11 @@
 #define C 299792458.0 // Speed of light
 #define FREQ_L1 1575.42e6 // L1 Frequency in Hz
 #define FREQ_L2 1227.60e6 // L2 Frequency in Hz
+#define min(a, b) (((a) < (b)) ? (a) : (b))
 
 // Wide-lane wavelength
 const double LAMBDA_WL = C / (FREQ_L1 - FREQ_L2);
+const double LAMBDA_WL_INV = (FREQ_L1 - FREQ_L2) / C;
 
 // L1 and L2 wavelengths
 const double LAMBDA_L1 = C / FREQ_L1;
@@ -18,13 +20,12 @@ const double LAMBDA_L2 = C / FREQ_L2;
 const double FREQ1_RATIO = FREQ_L1 / (FREQ_L1 - FREQ_L2);
 
 typedef struct {
-    double* wlp;
-    double* wlr;
     double* ip;
     double* ir;
+    double* b_delta;
 } MWPIRComb;
 
-double* vector_sum(const Vector* a, const Vector* b, unsigned char coeff) {
+double* vector_sum(const Vector* a, const Vector* b, unsigned char coeff) { // a + b or a - b
     const size_t length = a->size;
     // coeff = -1 => a - b
     // coeff = 1 => a + b
@@ -44,7 +45,7 @@ double* vector_sum(const Vector* a, const Vector* b, unsigned char coeff) {
     return result;
 }
 
-double* vector_mult(const Vector* a, double alpha) {
+double* vector_mult(const Vector* a, double alpha) { // a * alpha
     const size_t length = a->size;
     double* result = (double*)malloc(length * sizeof(double));
     if (!result) {
@@ -53,9 +54,91 @@ double* vector_mult(const Vector* a, double alpha) {
     }
 
     cblas_scopy(length, a, 1, result, 1);
-    cblas_dscal(length, alpha, a->data, 1);
+    cblas_dscal(length, alpha, result, 1);
 
     return result;
+}
+
+void solve_linear_system(double* A, double* b, double* x, int n) {
+    // A is n x n matrix, b is n vector
+    // Solves A x = b, stores result in x
+    double* augmented = malloc(n * (n + 1) * sizeof(double));
+    
+    // Build augmented matrix
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++)
+            augmented[i*(n+1) + j] = A[i*n + j];
+        augmented[i*(n+1) + n] = b[i];
+    }
+
+    // Forward elimination
+    for (int i = 0; i < n; i++) {
+        // Pivoting
+        double max = fabs(augmented[i*(n+1)+i]);
+        int max_row = i;
+        for (int k = i+1; k < n; k++) {
+            if (fabs(augmented[k*(n+1)+i]) > max) {
+                max = fabs(augmented[k*(n+1)+i]);
+                max_row = k;
+            }
+        }
+        if (max_row != i) {
+            for (int k = 0; k < n+1; k++) {
+                double tmp = augmented[i*(n+1)+k];
+                augmented[i*(n+1)+k] = augmented[max_row*(n+1)+k];
+                augmented[max_row*(n+1)+k] = tmp;
+            }
+        }
+
+        // Eliminate below
+        for (int k = i+1; k < n; k++) {
+            double factor = augmented[k*(n+1)+i] / augmented[i*(n+1)+i];
+            for (int j = i; j < n+1; j++)
+                augmented[k*(n+1)+j] -= factor * augmented[i*(n+1)+j];
+        }
+    }
+
+    // Back substitution
+    for (int i = n-1; i >= 0; i--) {
+        x[i] = augmented[i*(n+1)+n];
+        for (int j = i+1; j < n; j++)
+            x[i] -= augmented[i*(n+1)+j] * x[j];
+        x[i] /= augmented[i*(n+1)+i];
+    }
+
+    free(augmented);
+}
+
+double* polynomial_fit(const double* y) {
+    // Assumption: t is sequential, (t[0] = 1, t[1] = 2, t[n] = n + 1)
+    const int m = sizeof(y) / sizeof(*y);  // number of data points
+    const int degree = min(floor((m / 100 + 1)), 6); // in the original paper there is no floor() here, but it feels like there should be?
+    const int n = degree + 1;
+
+    // Allocate Vandermonde matrix A: m x n
+    double* A = calloc(m * n, sizeof(double));
+    for (int i = 0; i < m; ++i)
+        for (int j = 0; j < n; ++j)
+            A[i * n + j] = pow(i + 1, j);
+
+    // Compute AtA = A^T * A: n x n
+    double* AtA = calloc(n * n, sizeof(double));
+    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                n, n, m, 1.0, A, n, A, n, 0.0, AtA, n);
+
+    // Compute AtY = A^T * y: n x 1
+    double* AtY = calloc(n, sizeof(double));
+    cblas_dgemv(CblasRowMajor, CblasTrans,
+                m, n, 1.0, A, n, y, 1, 0.0, AtY, 1);
+
+    // Solve AtA * coeffs = AtY
+    double* coeffs = malloc(n * sizeof(double));
+    solve_linear_system(AtA, AtY, coeffs, n);
+
+    // Cleanup
+    free(A); free(AtA); free(AtY);
+
+    return coeffs;
 }
 
 double* linear_combination(const double* x, const double* y, double a, double b, int length, int opr) { // (a * x + opr * b * y) / (a + opr * b)
@@ -70,13 +153,10 @@ double* linear_combination(const double* x, const double* y, double a, double b,
 
     // result = a * x
     cblas_dcopy(length, x, 1, result, 1);      // result = x
-    cblas_dscal(length, a, result, 1);         // result = a * x
+    cblas_dscal(length, inv_f_2 * a, result, 1);         // result = inv_f_2 * a * x
 
     // result = result + b * y
-    cblas_daxpy(length, _b, y, 1, result, 1);   // result = a * x + b * y
-
-    // result = result * inv_f_2
-    cblas_dscal(length, inv_f_2, result, 1);         // result = a * x
+    cblas_daxpy(length, inv_f_2 * _b, y, 1, result, 1);   // result = inv_f_2 * a * x + inv_f_2 * b * y
 
     return result;
 }
@@ -90,58 +170,98 @@ MWPIRComb precompute_combinations(Vector* l1_phase, Vector* l2_phase, Vector* l1
     double* ip = vector_sum(l1_phase, l2_phase, -1); // iono phase
     double* ir = vector_sum(l2_psr, l1_psr, -1); // iono pseudorange
 
-    MWPIRComb result = { wlp, wlr, ip, ir };
+    double* b_delta = vector_sum(wlp, wlr, -1);
+
+    free(wlp);
+    free(wlr);
+
+    cblas_dscal(length, LAMBDA_WL_INV, b_delta, 1);
+
+    MWPIRComb result = { ip, ir, b_delta };
 
     return result;
 }
 
-Vector* cycle_slip_detection(Vector* l1_phase, Vector* l2_phase, Vector* l1_psr, Vector* l2_psr) {
-    int k = 1;
-    double running_rms = 0.0; // Actually, sigma squared.
-    double running_mean = compute_wide_lane_phase(*l1_phase->data, *l2_phase->data); // Pass first element of vectors.
-    Vector* outliers = create_vector();
+Vector* cycle_slip_detection(MWPIRComb wlio_comb) {
+    double* b_delta = wlio_comb.b_delta; // can I do this equality?
 
+    Vector* ms = create_vector();
 
-    int rl1_size = size(l1_phase);
-    int i, residual;
-    bool was_last_epoch_outlier = false;
+    // Calculate running mean.
+    double running_mean = *b_delta; // first item
+    double running_std2 = 0.25; // 0.5^2
+    bool prev_outlier = false;
+    
+    const size_t length = sizeof(b_delta) / sizeof(double);
+    for (int i = 1; i < length; i++) {
+        double b_w = *(b_delta + i);
 
-    for(i = 1; i < rl1_size; i++) {
-        double wide_lane_phase = compute_wide_lane_phase(*(l1_phase->data + i), *(l2_phase->data + i));
-        double wide_lane_psr = compute_wide_lane_psr(*(l1_psr->data + i), *(l2_psr->data + i));
-        double old_mean = running_mean;
-        residual = wide_lane_phase - wide_lane_psr - running_mean;
+        if ((b_w - running_mean) * (b_w - running_mean) > 16 * running_std2) { // Outlier
+            if(prev_outlier) { // any two consecutive outliers lying within 1 cycle
+                push_back(ms, running_mean); // Store the mean of last epoch. This is the mean for last arc.
 
-        running_mean = (k * running_mean + wide_lane_phase - wide_lane_psr) / (k + 1);
-        running_rms = sqrt((k - 1) / k * pow(running_rms, 2) + pow(wide_lane_phase - wide_lane_psr - running_mean, 2) / (k + 1)); // Again, updating sigma squared
+                running_mean = b_w; // Start new arc.
+                running_std2 = 0.25;
+                prev_outlier = false;
+                continue;
+            }
 
-        if(abs(residual) > 4 * running_rms) {
-            push_back(outliers, i); // Mark the epoch as an outlier.
-            was_last_epoch_outlier = true;
+            prev_outlier = true;
+            continue;
         }
 
-        if(was_last_epoch_outlier) {
-            k = 1; // Start new phase-connected arc
-        } else {
-            k += 1;
-            was_last_epoch_outlier = false;
-        }
+        double inv_i = (1 / i);
+        double b_w_prev = *(b_delta + i - 1);
+        double b_dff = b_w - running_mean;
+
+        running_mean = running_mean + inv_i * b_dff;
+        running_std2 = running_std2 + inv_i * (b_dff * b_dff - running_std2); // Avoiding sqrt
+        
+        prev_outlier = false;
     }
 
-    return outliers;
+    free(b_delta);
+
+    return ms;
+}
+
+double compute_polynomial_value(double* coeffs, int t) {
+    int order = sizeof(coeffs) / sizeof(*coeffs);
+
+    double accumulator = 0.0;
+    for(int i = 0; i < order; i++) {
+        accumulator += *(coeffs + i) * pow(t, i);
+    }
+
+    return accumulator;
+}
+
+Vector* ionospheric_splip_detection(MWPIRComb wlio_comb) {
+    double* ip = wlio_comb.ip;
+    double* ir = wlio_comb.ir;
+
+    double* coeffs = polynomial_fit(ir);
+    double L_i_prev = *ip;
+    double Q_i_prev = compute_polynomial_value(coeffs, 1);
+    bool match = false;
+
+    size_t length = sizeof(ip) / sizeof(*ip);
+    for(int i = 1; i < length; i++) { // Start from second observation
+        double L_i = *(ip + i);
+        double Q_i = compute_polynomial_value(coeffs, i + 1);
+
+        if((L_i - Q_i) - (L_i_prev - Q_i_prev) > 6) {
+            match = true;
+        }
+
+        if((L_i - Q_i) - (L_i_prev - Q_i_prev) < 1) {
+            match = true;
+        }
+    }
 }
 
 int main() {
-    // Example observation (just a dummy value)
-    GpsObservation obs = {
-        .time = 100000.0,
-        .L1_phase = 123456.789,
-        .L2_phase = 123450.123
-    };
-
-    // double wl_phase = compute_wide_lane_phase(obs);
-
-    printf("Epoch time: %.2f sec\n", obs.time);
+    
 
     return 0;
 }
