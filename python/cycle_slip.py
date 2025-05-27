@@ -2,6 +2,8 @@ import ctypes
 import numpy as np
 import time
 
+np.random.seed(42)
+
 lib = ctypes.CDLL('./lib/libnvec.dll')
 
 lib.find_cycle_slips.argtypes = [
@@ -15,10 +17,10 @@ lib.find_cycle_slips.restype = None
 
 def cycle_slip_correction():
     n = 50000000
-    a = np.random.rand(n)
-    b = np.random.rand(n)
-    c = np.random.rand(n)
-    d = np.random.rand(n)
+    a = np.random.rand(n) * 3
+    b = np.random.rand(n) * 3
+    c = np.random.rand(n) * 3
+    d = np.random.rand(n) * 3
 
     start = time.time()
     lib.find_cycle_slips(

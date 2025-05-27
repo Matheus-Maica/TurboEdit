@@ -31,25 +31,11 @@ void print_list(double* arr, size_t size) {
     // size_t size = sizeof(arr) / sizeof(arr[0]);
     printf("arr (size: %zu): [", size);
     for (size_t i = 0; i < size; ++i) {
-        printf("%.2f", arr[i]);
+        printf("%.18f", arr[i]);
         if (i < size - 1)
             printf(", ");
     }
     printf("]\n");
-}
-
-double* generate_random_array(size_t N) {
-    double* array = (double*)malloc(N * sizeof(double));
-    if (!array) {
-        fprintf(stderr, "Memory allocation failed\n");
-        exit(1);
-    }
-
-    for (size_t i = 0; i < N; ++i) {
-        array[i] = (double)rand() / RAND_MAX * 100.0;  // scale rand() to [0, 100)
-    }
-
-    return array;
 }
 
 double* copy_array(const double* arr, size_t length) {
@@ -60,7 +46,7 @@ double* copy_array(const double* arr, size_t length) {
     return new_array;
 }
 
-double* vector_sum(const double* a, const double* b, unsigned char coeff, size_t length) { // a + b or a - b
+double* vector_sum(const double* a, const double* b, char coeff, size_t length) { // a + b or a - b
     // coeff = -1 => a - b
     // coeff = 1 => a + b
     double* result = (double*)malloc(length * sizeof(double));
@@ -147,6 +133,7 @@ double* polynomial_fit(const double* y, int n, int m) {
     // Assumption: t is sequential, (t[0] = 1, t[1] = 2, t[n] = n + 1)
 
     // Allocate Vandermonde matrix A: m x n
+    // This is probably taking some time, see optimization strategies for this function.
     double* A = calloc(m * n, sizeof(double));
     for (int i = 0; i < m; ++i)
         for (int j = 0; j < n; ++j)
@@ -154,13 +141,11 @@ double* polynomial_fit(const double* y, int n, int m) {
 
     // Compute AtA = A^T * A: n x n
     double* AtA = calloc(n * n, sizeof(double));
-    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                n, n, m, 1.0, A, n, A, n, 0.0, AtA, n);
+    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, n, n, m, 1.0, A, n, A, n, 0.0, AtA, n);
 
     // Compute AtY = A^T * y: n x 1
     double* AtY = calloc(n, sizeof(double));
-    cblas_dgemv(CblasRowMajor, CblasTrans,
-                m, n, 1.0, A, n, y, 1, 0.0, AtY, 1);
+    cblas_dgemv(CblasRowMajor, CblasTrans, m, n, 1.0, A, n, y, 1, 0.0, AtY, 1);
 
     // Solve AtA * coeffs = AtY
     double* coeffs = malloc(n * sizeof(double));
@@ -222,13 +207,24 @@ Vector* widelane_slip_detection(MWPIRComb wlio_comb, size_t length) {
     double running_mean = *b_delta; // first item
     double running_std2 = 0.25; // 0.5^2
     bool prev_outlier = false;
+
+    double smallest_std2 = 0.0;
     
     for (int i = 1; i < length; i++) {
         double b_w = *(b_delta + i);
 
         if ((b_w - running_mean) * (b_w - running_mean) > 16 * running_std2) { // Outlier
-            if(prev_outlier) { // any two consecutive outliers lying within 1 cycle
+            double b_w_next = *(b_delta + i + 1);
+            if(prev_outlier && fabs(b_w - b_w_next) <= 1) { // any two consecutive outliers lying within 1 cycle
+                int lastSlip = ms->size == 0 ? 0 : vector_at(ms, ms->size - 1);
+                int nPointsInArc = i - lastSlip - 1; // Current index - Index of last point in prev arc. - 1 = number of data points in arc.
+
                 push_back(ms, i - 1); // Store the mean of last epoch. This is the mean for last arc.
+
+                double std_mean = running_std2 / (nPointsInArc - 1);
+                if(std_mean < smallest_std2) {
+                    smallest_std2 = std_mean;
+                }
 
                 running_mean = b_w; // Start new arc.
                 running_std2 = 0.25;
@@ -275,11 +271,11 @@ Vector* ionospheric_splip_detection(MWPIRComb wlio_comb, size_t length) {
 
     Vector* slips = create_vector();
 
-    for(int i = 1; i < length - 1; i++) { // Start from second observation
-        static double Q_i_prev = 0.0;
-        static double Q_i = 0.0;
-        static double Q_i_next = 0.0;
+    double Q_i_prev = 0.0;
+    double Q_i = 0.0;
+    double Q_i_next = 0.0;
 
+    for(int i = 1; i < length - 1; i++) { // Start from second observation
         double L_i = *(ip + i);
         double L_i_prev = *(ip + i - 1);
         double L_i_next = *(ip + i + 1);
@@ -332,6 +328,9 @@ void* find_cycle_slips(double* l1_p, double* l2_p, double* l1_r, double* l2_r, s
     end = clock();
 
     printf("ionospheric_splip_detection took %.2f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
+
+    // print_vector(widelane_slips);
+    // print_vector(iono_slips);
 
     destroy(l1_phase); destroy(l2_phase); destroy(l1_psr); destroy(l2_psr); free(obs.b_delta); free(obs.ip); free(obs.ir);
 }
