@@ -4,8 +4,9 @@
 #include <math.h>
 #include <stdbool.h>
 #include <time.h>
-#include "nvector.h"
+#include "dvector.h"
 #include "main.h"
+#include "svector.h"
 
 #define C 299792458.0 // Speed of light
 #define FREQ_L1 1575.42e6 // L1 Frequency in Hz
@@ -198,37 +199,67 @@ MWPIRComb precompute_combinations(Vector* l1_phase, Vector* l2_phase, Vector* l1
     return result;
 }
 
-Vector* widelane_slip_detection(MWPIRComb wlio_comb, size_t length) {
+double harmonicNumber(int N) {
+    if(N == 0)
+        return 0;
+
+    double harmonic = 1.00;
+
+    for (int i = 2; i <= N; i++) {
+        harmonic += (double)1 / i;
+    }
+
+    return harmonic;
+}
+
+double compute_harmonic_sequence(double* b_delta, int nPoints, int firstIndex) {
+    int i;
+    double resultingSum = 0;
+    for(i = firstIndex; i < firstIndex + nPoints; i++) {
+        double b_w = *(b_delta + i);
+        resultingSum += harmonicNumber(i) * b_w;
+    }
+
+    return resultingSum;
+}
+
+SlipVector* widelane_slip_detection(MWPIRComb wlio_comb, size_t length) {
     double* b_delta = copy_array(wlio_comb.b_delta, length);
 
-    Vector* ms = create_vector();
+    SlipVector* slips = screate_vector();
 
     // Calculate running mean.
     double running_mean = *b_delta; // first item
     double running_std2 = 0.25; // 0.5^2
     bool prev_outlier = false;
+    double firstB = running_mean;
 
     double smallest_std2 = 0.0;
+    double b_SmallestSTD = running_mean;
+    int k, i;
     
-    for (int i = 1; i < length; i++) {
+    for (i = 1, k = 2; i < length; i++) {
         double b_w = *(b_delta + i);
 
         if ((b_w - running_mean) * (b_w - running_mean) > 16 * running_std2) { // Outlier
             double b_w_next = *(b_delta + i + 1);
             if(prev_outlier && fabs(b_w - b_w_next) <= 1) { // any two consecutive outliers lying within 1 cycle
-                int lastSlip = ms->size == 0 ? 0 : vector_at(ms, ms->size - 1);
-                int nPointsInArc = i - lastSlip - 1; // Current index - Index of last point in prev arc. - 1 = number of data points in arc.
+                double std_mean = running_std2 / (k - 1);
 
-                push_back(ms, i - 1); // Store the mean of last epoch. This is the mean for last arc.
-
-                double std_mean = running_std2 / (nPointsInArc - 1);
+                Slip slip = { .index = i - 1, .mean = running_mean, .stdev = std_mean, .label = 0, .nPoints = k - 1, .firstB = firstB, .firstIndex = i - k - 1 };
+                
+                spush_back(slips, slip); // Store the mean of last epoch. This is the mean for last arc.
+                
                 if(std_mean < smallest_std2) {
                     smallest_std2 = std_mean;
+                    b_SmallestSTD = running_mean;
                 }
 
                 running_mean = b_w; // Start new arc.
                 running_std2 = 0.25;
                 prev_outlier = false;
+                k = 2;
+                firstB = b_w;
                 continue;
             }
 
@@ -236,19 +267,42 @@ Vector* widelane_slip_detection(MWPIRComb wlio_comb, size_t length) {
             continue;
         }
 
-        double inv_i = (1 / i);
+        double inv_i = (1 / k);
         double b_w_prev = *(b_delta + i - 1);
         double b_dff = b_w - running_mean;
 
         running_mean = running_mean + inv_i * b_dff;
         running_std2 = running_std2 + inv_i * (b_dff * b_dff - running_std2); // Avoiding sqrt
         
+        k++;
         prev_outlier = false;
+    }
+
+    int numArcs = slips->size - 1;
+    for(int i = 0; i < numArcs;) {
+        Slip thisSlip = svector_at(slips, i);
+        Slip nextSlip = svector_at(slips, i + 1);
+
+        double diff = nextSlip.mean - thisSlip.mean;
+        double std_error_diff2 = thisSlip.stdev + nextSlip.stdev;
+
+        if(std_error_diff2 < 0.0225 && diff - floor(diff) < 0.3) { // 0.15^2 = 0.0225
+            int offset = round(diff);
+
+            thisSlip.label -= offset;
+            thisSlip.mean = (thisSlip.nPoints * thisSlip.mean + nextSlip.nPoints * nextSlip.mean) / (thisSlip.nPoints + nextSlip.mean);
+            thisSlip.nPoints = thisSlip.nPoints + nextSlip.nPoints;
+            thisSlip.stdev = 1 / thisSlip.nPoints * (0.25 + (1 / thisSlip.nPoints) * (
+                (-thisSlip.nPoints - harmonicNumber(thisSlip.nPoints - 1) * thisSlip.mean - thisSlip.firstB - compute_harmonic_sequence(b_delta, thisSlip.nPoints, thisSlip.firstIndex))
+            ));
+        }
+
+        i += 1;
     }
 
     free(b_delta);
 
-    return ms;
+    return slips; // Warning, this is currently returning the wrong type.
 }
 
 // Horner's method (https://en.wikipedia.org/wiki/Horner%27s_method)
@@ -314,11 +368,12 @@ void* find_cycle_slips(double* l1_p, double* l2_p, double* l1_r, double* l2_r, s
     clock_t start = clock();
     MWPIRComb obs = precompute_combinations(l1_phase, l2_phase, l1_psr, l2_psr);
     clock_t end = clock();
+    destroy(l1_phase); destroy(l2_phase); destroy(l1_psr); destroy(l2_psr);
 
     printf("precompute_combinations took %.2f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
 
     start = clock();
-    Vector* widelane_slips = widelane_slip_detection(obs, length);
+    SlipVector* widelane_slips = widelane_slip_detection(obs, length);
     end = clock();
 
     printf("widelane_slip_detection took %.2f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
@@ -332,5 +387,6 @@ void* find_cycle_slips(double* l1_p, double* l2_p, double* l1_r, double* l2_r, s
     // print_vector(widelane_slips);
     // print_vector(iono_slips);
 
-    destroy(l1_phase); destroy(l2_phase); destroy(l1_psr); destroy(l2_psr); free(obs.b_delta); free(obs.ip); free(obs.ir);
+    destroy(iono_slips); sdestroy(widelane_slips);
+    free(obs.b_delta); free(obs.ip); free(obs.ir);
 }

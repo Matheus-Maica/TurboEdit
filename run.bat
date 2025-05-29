@@ -3,8 +3,8 @@ set INCLUDE_PATH=.\openblas\include
 set LIB_PATH=.\lib
 
 echo Compiling...
-gcc -O3 -march=native -funroll-loops -fopenmp -fPIC -I%INCLUDE_PATH% -c src\main.c src\nvector.c
-gcc -shared -o lib\libnvec.dll main.o nvector.o -L%LIB_PATH% -lopenblas
+gcc -O3 -march=native -funroll-loops -fopenmp -fPIC -I%INCLUDE_PATH% -c src\main.c src\dvector.c src\svector.c
+gcc -shared -o lib\libnvec.dll main.o dvector.o svector.o -L%LIB_PATH% -lopenblas
 
 del *.o
 echo Done.
