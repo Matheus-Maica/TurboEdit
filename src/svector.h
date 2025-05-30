@@ -5,12 +5,11 @@
 
 typedef struct {
     int index;
-    double mean;
+    double mean_bw;
     double stdev;
-    short int label;
+    int delta_N_w;
     int nPoints;
-    double firstB;
-    int firstIndex;
+    char isPhaseConnected;
 } Slip;
 
 typedef struct {
