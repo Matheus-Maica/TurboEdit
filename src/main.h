@@ -5,18 +5,13 @@
 
 typedef struct {
     SlipVector* arcs;
-    int* outliers;
-    int outliers_length;
-} WlData; // wide-lane results
-
-typedef struct {
-    WlData widelane;
+    size_t widelane_arcs_length;
     double* ionospheric;
-    int widelane_arcs_length;
     int ionospheric_slips_length;
+    int* outliers;
     int outliers_length;
 } Results;
 
-Results* find_cycle_slips(double* a, double* b, double* c, double* d, size_t n);
+Results find_cycle_slips(double* a, double* b, double* c, double* d, size_t n);
 
 #endif

@@ -17,10 +17,20 @@ SlipVector* screate_vector() {
 void spush_back(SlipVector* vector, Slip value) {
     if (vector->data == NULL) {
         vector->data = (Slip*)malloc(sizeof(Slip));
+        if (vector->data == NULL) {
+            fprintf(stderr, "malloc failed in spush_back\n");
+            exit(EXIT_FAILURE); // or return an error code
+        }
         vector->capacity = 1;
     } else if (vector->size >= vector->capacity) {
-        vector->capacity *= 2;
-        vector->data = (Slip*)realloc(vector->data, vector->capacity * sizeof(Slip));
+        size_t new_capacity = vector->capacity * 2;
+        Slip* new_data = (Slip*)realloc(vector->data, new_capacity * sizeof(Slip));
+        if (new_data == NULL) {
+            fprintf(stderr, "realloc failed in spush_back\n");
+            exit(EXIT_FAILURE); // or return an error code
+        }
+        vector->data = new_data;
+        vector->capacity = new_capacity;
     }
 
     vector->data[vector->size] = value;
@@ -38,6 +48,14 @@ Slip svector_at(SlipVector* vector, size_t index) {
         exit(1);
     }
     return vector->data[index];
+}
+
+Slip* svector_at_ptr(SlipVector* vector, size_t index) {
+    if (index >= vector->size) {
+        fprintf(stderr, "Index out of bounds\n");
+        exit(1);
+    }
+    return &vector->data[index];
 }
 
 void sdestroy(SlipVector* vector) {

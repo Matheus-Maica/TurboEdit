@@ -23,5 +23,6 @@ void spush_back(SlipVector* vector, Slip value);
 void spop_back(SlipVector* vector);
 Slip svector_at(SlipVector* vector, size_t index);
 void sdestroy(SlipVector* vector);
+Slip* svector_at_ptr(SlipVector* vector, size_t index);
 
 #endif

@@ -5,8 +5,8 @@
 #include <stdbool.h>
 #include <time.h>
 #include "dvector.h"
-#include "svector.h"
 #include "ivector.h"
+#include "svector.h"
 #include "main.h"
 
 #define C 299792458.0 // Speed of light
@@ -28,6 +28,12 @@ typedef struct {
     double* ir;
     double* b_delta;
 } MWPIRComb;
+
+typedef struct {
+    SlipVector* arcs;
+    int* outliers;
+    int outliers_length;
+} WlData; // wide-lane results
 
 void print_list(double* arr, size_t size) {
     // size_t size = sizeof(arr) / sizeof(arr[0]);
@@ -202,16 +208,16 @@ MWPIRComb precompute_combinations(Vector* l1_phase, Vector* l2_phase, Vector* l1
 
 void connect_arcs(SlipVector* arcs, int ref_idx) {
     int num_arcs = arcs->size;
-    Slip reference_arc = svector_at(arcs, ref_idx);
-    reference_arc.isPhaseConnected = 1;
+    Slip* reference_arc = svector_at_ptr(arcs, ref_idx);
+    reference_arc->isPhaseConnected = 1;
 
     for(int i = 0; i < num_arcs; i++) {
         if(ref_idx == i) continue;
 
         Slip current_arc = svector_at(arcs, i);
 
-        double diff = current_arc.mean_bw - reference_arc.mean_bw;
-        double std_err = current_arc.stdev + reference_arc.stdev;
+        double diff = current_arc.mean_bw - reference_arc->mean_bw;
+        double std_err = current_arc.stdev + reference_arc->stdev;
 
         if(std_err < 0.0225 && diff - floor(diff) < 0.3) { // 0.15^2 = 0.0225
             int offset = round(diff);
@@ -219,21 +225,18 @@ void connect_arcs(SlipVector* arcs, int ref_idx) {
             current_arc.delta_N_w = offset;
             current_arc.isPhaseConnected = 1;
             
-            reference_arc.mean_bw = (current_arc.nPoints * current_arc.mean_bw + reference_arc.nPoints * reference_arc.mean_bw) / (current_arc.nPoints + reference_arc.mean_bw);
-            reference_arc.nPoints = current_arc.nPoints + reference_arc.nPoints;
+            reference_arc->mean_bw = (current_arc.nPoints * current_arc.mean_bw + reference_arc->nPoints * reference_arc->mean_bw) / (current_arc.nPoints + reference_arc->mean_bw);
+            reference_arc->nPoints = current_arc.nPoints + reference_arc->nPoints;
         }
     }
 }
 
-WlData widelane_slip_detection(MWPIRComb wlio_comb, size_t length) {
-    double* b_delta = copy_array(wlio_comb.b_delta, length);
-
+WlData widelane_slip_detection(const MWPIRComb wlio_comb, size_t length) {
     SlipVector* slips = screate_vector();
     IVector* outliers = icreate_vector(); // creates vector of integers.
 
-
     // Calculate running mean.
-    double running_mean = *b_delta; // first item
+    double running_mean = *wlio_comb.b_delta; // first item
     double running_std2 = 0.25; // 0.5^2
     bool prev_outlier = false;
 
@@ -242,15 +245,15 @@ WlData widelane_slip_detection(MWPIRComb wlio_comb, size_t length) {
     int k, i;
     
     /* wide-lade cycle slip detection */
-    for (i = 1, k = 2; i < length; i++) {
-        double b_w = *(b_delta + i);
+    for (i = 1, k = 2; i < length - 1; i++) {
+        double b_w = *(wlio_comb.b_delta + i);
 
         if ((b_w - running_mean) * (b_w - running_mean) > 16 * running_std2) { // Outlier
-            double b_w_next = *(b_delta + i + 1);
+            double b_w_next = *(wlio_comb.b_delta + i + 1);
             if(prev_outlier && fabs(b_w - b_w_next) <= 1) { // any two consecutive outliers lying within 1 cycle
                 ipop_back(outliers); // Last epoch was actually a slip, not just outlier.
                 double std_mean = running_std2 / (k - 1);
-
+                
                 Slip slip = { .index = i - 1, .mean_bw = running_mean, .stdev = std_mean, .delta_N_w = 0, .nPoints = k - 1, .isPhaseConnected = 0 };
                 
                 spush_back(slips, slip); // Store the mean of last epoch. This is the mean for last arc.
@@ -273,7 +276,7 @@ WlData widelane_slip_detection(MWPIRComb wlio_comb, size_t length) {
         }
 
         double inv_i = (1 / k);
-        double b_w_prev = *(b_delta + i - 1);
+        double b_w_prev = *(wlio_comb.b_delta + i - 1);
         double b_dff = b_w - running_mean;
 
         running_mean = running_mean + inv_i * b_dff;
@@ -285,8 +288,6 @@ WlData widelane_slip_detection(MWPIRComb wlio_comb, size_t length) {
 
     /* wide-lade phase connection */
     connect_arcs(slips, idxSmallestSTD);
-
-    free(b_delta);
     
     WlData result = { .arcs = slips, .outliers = outliers->data, .outliers_length = outliers->size };
 
@@ -302,14 +303,11 @@ double eval_poly(double* coeffs, int t, int order) {
     return result;
 }
 
-Vector* ionospheric_splip_detection(MWPIRComb wlio_comb, size_t length) {
-    double* ip = copy_array(wlio_comb.ip, length);
-    double* ir = copy_array(wlio_comb.ir, length);
-
-    const int degree = min(round((length / 100 + 1)), 6); // in the original paper there is no floor() here, but it feels like there should be?
+Vector* ionospheric_splip_detection(const MWPIRComb wlio_comb, size_t length) {
+    const int degree = min(round((length / 100 + 1)), 6);
     const int n = degree + 1;
 
-    double* coeffs = polynomial_fit(ir, n, length);
+    double* coeffs = polynomial_fit(wlio_comb.ir, n, length);
 
     Vector* slips = create_vector();
 
@@ -318,9 +316,9 @@ Vector* ionospheric_splip_detection(MWPIRComb wlio_comb, size_t length) {
     double Q_i_next = 0.0;
 
     for(int i = 1; i < length - 1; i++) { // Start from second observation
-        double L_i = *(ip + i);
-        double L_i_prev = *(ip + i - 1);
-        double L_i_next = *(ip + i + 1);
+        double L_i = *(wlio_comb.ip + i);
+        double L_i_prev = *(wlio_comb.ip + i - 1);
+        double L_i_next = *(wlio_comb.ip + i + 1);
 
         if(i == 1) {
             Q_i_prev = eval_poly(coeffs, i, n);
@@ -337,12 +335,10 @@ Vector* ionospheric_splip_detection(MWPIRComb wlio_comb, size_t length) {
         }
     }
 
-    free(ip); free(ir);
-
     return slips;
 }
 
-Results* find_cycle_slips(double* l1_p, double* l2_p, double* l1_r, double* l2_r, size_t length) {
+Results find_cycle_slips(double* l1_p, double* l2_p, double* l1_r, double* l2_r, size_t length) {
     Vector* l1_phase = create_vector();
     Vector* l2_phase = create_vector();
     Vector* l1_psr = create_vector();
@@ -372,17 +368,17 @@ Results* find_cycle_slips(double* l1_p, double* l2_p, double* l1_r, double* l2_r
 
     printf("ionospheric_splip_detection took %.2f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
 
-    Results* res = malloc(sizeof(Results));
-    if (res == NULL) return NULL;
-
-    res->ionospheric = iono_slips->data; 
-    res->widelane = widelane_slips;
-    res->widelane_arcs_length = widelane_slips.arcs->size;
-    res->ionospheric_slips_length = iono_slips->size;
-    res->outliers_length = widelane_slips.outliers_length;
+    Results res = {
+        .arcs = widelane_slips.arcs,
+        .widelane_arcs_length = widelane_slips.arcs->size,
+        .ionospheric = iono_slips->data,
+        .ionospheric_slips_length = iono_slips->size,
+        .outliers = widelane_slips.outliers,
+        .outliers_length = widelane_slips.outliers_length
+    };
 
     return res;
 
-    // destroy(iono_slips); sdestroy(widelane_slips.arcs); free(widelane_slips.outliers);
-    // free(obs.b_delta); free(obs.ip); free(obs.ir);
+    // destroy(iono_slips); sdestroy(widelane_slips.arcs); free(widelane_slips.outliers); -> delegate freeing this to the caller. Provide helper function.
+    free(obs.b_delta); free(obs.ip); free(obs.ir);
 }

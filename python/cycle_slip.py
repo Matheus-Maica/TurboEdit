@@ -21,19 +21,23 @@ class WlData(Structure):
     _fields_ = [("arcs", POINTER(SlipVector)),
                  ("outliers", POINTER(c_int)),
                  ("outliers_length", c_int)]
-    
+
 class Results(Structure):
-    _fields_ = [("widelane", WlData),
+    _fields_ = [("arcs", POINTER(SlipVector)),
+                ("widelane_arcs_length", c_size_t),
                 ("ionospheric", POINTER(c_double)),
-                ("widelane_arcs_length", c_int),
                 ("ionospheric_slips_length", c_int),
+                ("outliers", POINTER(c_int)),
                 ("outliers_length", c_int)]
     
-    # def get_outliers(self):
-    #     return np.array([self.widelane.outliers[j] for j in range(self.outliers_length)])
+    def get_outliers(self):
+        return np.array([self.outliers[j] for j in range(self.outliers_length)])
+    
+    def get_arcs(self):
+        return [self.arcs[j] for j in range(self.widelane_arcs_length)]
 
-    # def __repr__(self):
-    #     return f"<Results outliers_length={self.outliers_length}, outliers={self.get_outliers()}>"
+    def __repr__(self):
+        return f"<Results widelane_arcs_length={self.widelane_arcs_length}>"
 
 lib = CDLL('./lib/libnvec.dll')
 
@@ -44,14 +48,14 @@ lib.find_cycle_slips.argtypes = [
     POINTER(c_double),
     c_size_t
 ]
-lib.find_cycle_slips.restype = POINTER(Results)
+lib.find_cycle_slips.restype = Results
 
 def cycle_slip_correction():
-    n = 50000
-    a = np.random.rand(n) * 3
-    b = np.random.rand(n) * 3
-    c = np.random.rand(n) * 3
-    d = np.random.rand(n) * 3
+    n = 50000000
+    a = np.random.rand(n) * 30
+    b = np.random.rand(n) * 30
+    c = np.random.rand(n) * 30
+    d = np.random.rand(n) * 30
 
     start = time.time()
     slip_data = lib.find_cycle_slips(
@@ -63,7 +67,7 @@ def cycle_slip_correction():
     )
     end = time.time()
 
-    # print(slip_data)
+    print(slip_data)
 
     print(f"Time elapsed: {end - start}")
 

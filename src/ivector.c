@@ -13,10 +13,20 @@ IVector* icreate_vector() {
 void ipush_back(IVector* vector, int value) {
     if (vector->data == NULL) {
         vector->data = (int*)malloc(sizeof(int));
+        if (vector->data == NULL) {
+            fprintf(stderr, "malloc failed in spush_back\n");
+            exit(EXIT_FAILURE); // or return an error code
+        }
         vector->capacity = 1;
     } else if (vector->size >= vector->capacity) {
-        vector->capacity *= 2;
-        vector->data = (int*)realloc(vector->data, vector->capacity * sizeof(int));
+        size_t new_capacity = vector->capacity * 2;
+        int* new_data = (int*)realloc(vector->data, new_capacity * sizeof(int));
+        if (new_data == NULL) {
+            fprintf(stderr, "realloc failed in spush_back\n");
+            exit(EXIT_FAILURE); // or return an error code
+        }
+        vector->data = new_data;
+        vector->capacity = new_capacity;
     }
 
     vector->data[vector->size] = value;
