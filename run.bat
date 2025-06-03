@@ -11,4 +11,4 @@ del *.o
 echo Done.
 
 set OMP_NUM_THREADS=20
-python python/cycle_slip.py
+python python/bindings.py

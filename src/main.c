@@ -288,7 +288,7 @@ WlData widelane_slip_detection(const MWPIRComb wlio_comb, size_t length) {
 
     /* wide-lade phase connection */
     connect_arcs(slips, idxSmallestSTD);
-    
+
     WlData result = { .arcs = slips, .outliers = outliers->data, .outliers_length = outliers->size };
 
     return result;
