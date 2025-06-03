@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools >= 77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "turboedit"
-version = "0.1.0"
+version = "0.0.8"
 description = "Implementation of TurboEdit algorithm for GNSS data"
 authors = [{ name="Matheus Maica", email="matheus.maica@unb.ca" }]
 readme = "README.md"
@@ -13,8 +13,9 @@ requires-python = ">=3.7"
 
 [tool.setuptools]
 packages = ["turboedit"]
-package-dir = { "" = "python" }
-include-package-data = true
 
 [tool.setuptools.package-data]
-turboedit = ["../lib/*.dll"]  # Include the DLL
+turboedit = ["lib/*.dll"]
+
+[project.urls]
+Homepage = "https://github.com/Matheus-Maica"
