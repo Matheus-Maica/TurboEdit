@@ -232,26 +232,25 @@ void connect_arcs(SlipVector* arcs, int ref_idx) {
 }
 
 WlData widelane_slip_detection(const MWPIRComb wlio_comb, size_t length) {
-    SlipVector* slips = screate_vector();
+    SlipVector* slips = screate_vector(); // creates vector of slips
     IVector* outliers = icreate_vector(); // creates vector of integers.
 
     // Calculate running mean.
     double running_mean = *wlio_comb.b_delta; // first item
-    double running_std2 = 0.25; // 0.5^2
+    double running_std2 = 0.25; // You never actually *have* to take the square root of the standard deviation, so I just don't, sqrt is a costly operation and might as well skip it by just squaring everything else.
     bool prev_outlier = false;
 
     double smallest_std2 = 0.0;
     int idxSmallestSTD = 0;
-    int k, i;
+    int k, i; // k is the number of epochs in each arc.
     
     /* wide-lade cycle slip detection */
-    for (i = 1, k = 2; i < length - 1; i++) {
+    for (i = 1, k = 2; i < length - 1; i++) { // We start from the second epoch. "k" counts the number of epochs in the current arc, and currently, there are 2 (the first and the current one we're iterating over)
         double b_w = *(wlio_comb.b_delta + i);
 
         if ((b_w - running_mean) * (b_w - running_mean) > 16 * running_std2) { // Outlier
             double b_w_next = *(wlio_comb.b_delta + i + 1);
-            if(prev_outlier && fabs(b_w - b_w_next) <= 1) { // any two consecutive outliers lying within 1 cycle
-                ipop_back(outliers); // Last epoch was actually a slip, not just outlier.
+            if(prev_outlier && fabs(b_w - b_w_next) <= 1) { // any two consecutive outliers lying within 1 cycle are a cycle slip.
                 double std_mean = running_std2 / (k - 1);
                 
                 Slip slip = { .index = i - 1, .mean_bw = running_mean, .stdev = std_mean, .delta_N_w = 0, .nPoints = k - 1, .isPhaseConnected = 0 };
@@ -263,11 +262,9 @@ WlData widelane_slip_detection(const MWPIRComb wlio_comb, size_t length) {
                     idxSmallestSTD = slips->size - 1;
                 }
 
-                running_mean = b_w; // Start new arc.
+                running_mean = b_w; // Start new arc, reset values for running_mean, running standard dev and k.
                 running_std2 = 0.25;
-                prev_outlier = false;
                 k = 2;
-                continue;
             }
 
             ipush_back(outliers, i); // Mark this epoch as outlier
@@ -275,21 +272,19 @@ WlData widelane_slip_detection(const MWPIRComb wlio_comb, size_t length) {
             continue;
         }
 
-        double inv_i = (1 / k);
-        double b_w_prev = *(wlio_comb.b_delta + i - 1);
         double b_dff = b_w - running_mean;
 
-        running_mean = running_mean + inv_i * b_dff;
-        running_std2 = running_std2 + inv_i * (b_dff * b_dff - running_std2); // Avoiding sqrt
+        running_mean = running_mean + (1 / k) * b_dff; // Update the running mean and standard deviation.
+        running_std2 = running_std2 + (1 / k) * (b_dff * b_dff - running_std2);
         
-        k++;
+        k++; // If the point was an outlier, we do not increment k, since that point will be deleted, if it wasn't an outlier, this point will be added to the current arc, and we increment k.
         prev_outlier = false;
     }
 
     /* wide-lade phase connection */
     connect_arcs(slips, idxSmallestSTD);
 
-    WlData result = { .arcs = slips, .outliers = outliers->data, .outliers_length = outliers->size };
+    WlData result = { .arcs = slips, .outliers = outliers->data, .outliers_length = outliers->size }; // both outliers and slips are heap allocated, free here everything I can and delegate the rest to the caller
 
     return result;
 }

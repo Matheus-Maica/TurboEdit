@@ -1,10 +1,31 @@
 from ctypes import *
 import numpy as np
 import os
+import matplotlib.pyplot as plt
+
+np.random.seed(42)
 
 C = 299792458.0
 FREQ_L1 = 1575.42e6
 FREQ_L2 = 1227.60e6
+
+def generate_arr(n):
+    mu = 0
+    sigma = 0.002
+    start_price = 100
+    jump_magnitude = 4
+    jump_position = np.random.randint(n // 4, 3 * n // 4)
+
+    returns = np.random.normal(loc=mu, scale=sigma, size=n)
+
+    prices = [start_price]
+    for r in returns:
+        prices.append(prices[-1] * np.exp(r))
+    prices = np.array(prices)
+
+    prices[jump_position+1:] *= (1 + jump_magnitude)
+
+    return prices
 
 class Slip(Structure):
     _fields_ = [("index", c_int), ("mean_bw", c_double), ("stdev", c_double), ("delta_N_w", c_int), ("nPoints", c_int), ("isPhaseConnected", c_char)]
@@ -75,12 +96,17 @@ def correct_cycle_slips(
 
 def main():
     n = 50000
-    a = np.random.rand(n) * 30
-    b = np.random.rand(n) * 30
-    c = np.random.rand(n) * 30
-    d = np.random.rand(n) * 30
+    a = generate_arr(n - 1)
+    b = generate_arr(n - 1)
+    c = generate_arr(n - 1)
+    d = generate_arr(n - 1)
+    t = np.arange(n)
+    plt.plot(t, a, color='b')
 
-    correct_cycle_slips(a, b, c, d)
+    a, b, c, d = correct_cycle_slips(a, b, c, d)
+
+    plt.plot(t, a, color='r')
+    plt.show()
 
 if __name__ == '__main__':
     main()
