@@ -214,19 +214,19 @@ void connect_arcs(SlipVector* arcs, int ref_idx) {
     for(int i = 0; i < num_arcs; i++) {
         if(ref_idx == i) continue;
 
-        Slip current_arc = svector_at(arcs, i);
+        Slip* current_arc = svector_at_ptr(arcs, i);
 
-        double diff = current_arc.mean_bw - reference_arc->mean_bw;
-        double std_err = current_arc.stdev + reference_arc->stdev;
+        double diff = current_arc->mean_bw - reference_arc->mean_bw;
+        double std_err = current_arc->stdev + reference_arc->stdev;
 
         if(std_err < 0.0225 && diff - floor(diff) < 0.3) { // 0.15^2 = 0.0225
             int offset = round(diff);
 
-            current_arc.delta_N_w = offset;
-            current_arc.isPhaseConnected = 1;
+            current_arc->delta_N_w = offset;
+            current_arc->isPhaseConnected = 1;
             
-            reference_arc->mean_bw = (current_arc.nPoints * current_arc.mean_bw + reference_arc->nPoints * reference_arc->mean_bw) / (current_arc.nPoints + reference_arc->mean_bw);
-            reference_arc->nPoints = current_arc.nPoints + reference_arc->nPoints;
+            reference_arc->mean_bw = (current_arc->nPoints * current_arc->mean_bw + reference_arc->nPoints * reference_arc->mean_bw) / (current_arc->nPoints + reference_arc->mean_bw);
+            reference_arc->nPoints = current_arc->nPoints + reference_arc->nPoints;
         }
     }
 }
