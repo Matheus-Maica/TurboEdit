@@ -208,6 +208,9 @@ MWPIRComb precompute_combinations(Vector* l1_phase, Vector* l2_phase, Vector* l1
 
 void connect_arcs(SlipVector* arcs, int ref_idx) {
     int num_arcs = arcs->size;
+    printf("Initiating widelane arc connection... Number of arcs: %d \n", num_arcs);
+    if(num_arcs == 0) return;
+
     Slip* reference_arc = svector_at_ptr(arcs, ref_idx);
     reference_arc->isPhaseConnected = 1;
 

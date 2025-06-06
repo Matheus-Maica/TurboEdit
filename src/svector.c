@@ -52,7 +52,9 @@ Slip svector_at(SlipVector* vector, size_t index) {
 
 Slip* svector_at_ptr(SlipVector* vector, size_t index) {
     if (index >= vector->size) {
-        fprintf(stderr, "Index out of bounds\n");
+        printf("At svector_at_ptr: Index ");
+        printf("%d", index);
+        printf(" out of bounds\n");
         exit(1);
     }
     return &vector->data[index];

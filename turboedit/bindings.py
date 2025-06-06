@@ -6,26 +6,74 @@ import matplotlib.pyplot as plt
 np.random.seed(42)
 
 C = 299792458.0
-FREQ_L1 = 1575.42e6
-FREQ_L2 = 1227.60e6
 
-def generate_arr(n):
-    mu = 0
-    sigma = 0.002
-    start_price = 100
-    jump_magnitude = 4
-    jump_position = np.random.randint(n // 4, 3 * n // 4)
+def match_sampling_rate(l1, l2, p1, p2, F1, F2, method='mean'):
+    def downsample(arr, factor, agg='mean'):
+        arr = arr[:len(arr) - len(arr) % factor]  # trim excess if not divisible
+        reshaped = arr.reshape(-1, factor)
+        if agg == 'mean':
+            return reshaped.mean(axis=1)
+        elif agg == 'first':
+            return reshaped[:, 0]
+        elif callable(agg):
+            return agg(reshaped, axis=1)
+        else:
+            raise ValueError("Unsupported method: choose 'mean', 'first', or provide a function")
 
-    returns = np.random.normal(loc=mu, scale=sigma, size=n)
+    if F1 == F2:
+        return l1, l2, p1, p2
 
-    prices = [start_price]
-    for r in returns:
-        prices.append(prices[-1] * np.exp(r))
-    prices = np.array(prices)
+    elif F1 > F2:
+        factor = F1 // F2
+        if F1 % F2 != 0:
+            raise ValueError("F1 must be an integer multiple of F2 to downsample cleanly.")
+        l1_down = downsample(l1, factor, method)
+        l2_down = downsample(l2, factor, method)
+        return l1_down, l2_down, p1, p2
 
-    prices[jump_position+1:] *= (1 + jump_magnitude)
+    else:
+        factor = F2 // F1
+        if F2 % F1 != 0:
+            raise ValueError("F2 must be an integer multiple of F1 to downsample cleanly.")
+        p1_down = downsample(p1, factor, method)
+        p2_down = downsample(p2, factor, method)
+        return l1, l2, p1_down, p2_down
 
-    return prices
+def remove_gaps_from_original_l_series(l1, l2, F_high, F_low, gap_mask_1hz):
+    """
+    Masks (with NaN) the regions in l1 and l2 corresponding to gaps in the 1 Hz data.
+    The original length is preserved.
+
+    Parameters:
+        l1, l2          : original high-frequency arrays (e.g., 100 Hz)
+        F_high          : original sampling rate (e.g., 100)
+        F_low           : low sampling rate used for gap detection (e.g., 1)
+        gap_mask_1hz    : boolean array (True = valid, False = gap) of length (duration in seconds)
+
+    Returns:
+        l1_masked, l2_masked : same shape as l1 and l2, with NaNs in gap regions
+    """
+    if F_high % F_low != 0:
+        raise ValueError("F_high must be an integer multiple of F_low.")
+
+    factor = F_high // F_low
+    expected_len = len(gap_mask_1hz) * factor
+
+    if len(l1) < expected_len:
+        raise ValueError("Original high-frequency signals are shorter than expected from gap_mask.")
+
+    # Repeat each mask value for its corresponding high-frequency chunk
+    high_freq_mask = np.repeat(gap_mask_1hz, factor)
+
+    # Make sure the mask matches the signal length exactly
+    high_freq_mask = np.pad(high_freq_mask, (0, len(l1) - len(high_freq_mask)), constant_values=True)
+
+    l1_masked = l1.copy()
+    l2_masked = l2.copy()
+    l1_masked[~high_freq_mask] = np.nan
+    l2_masked[~high_freq_mask] = np.nan
+
+    return l1_masked, l2_masked
 
 class Slip(Structure):
     _fields_ = [("index", c_int), ("mean_bw", c_double), ("stdev", c_double), ("delta_N_w", c_int), ("nPoints", c_int), ("isPhaseConnected", c_char)]
@@ -59,27 +107,35 @@ def correct_cycle_slips(
     l1_phase: np.ndarray,
     l2_phase: np.ndarray, 
     l1_psr: np.ndarray, 
-    l2_psr: np.ndarray, 
+    l2_psr: np.ndarray,
+    FREQ_L1: float = 1575.42e6,
+    FREQ_L2: float = 1227.60e6,
+    **kwargs
 ):
-    if len({len(l1_phase), len(l2_phase), len(l1_psr), len(l2_psr)}) != 1:
-        raise Exception("Phase and pseudorange data must have the same length.")
-    
-    l1_phase = l1_phase * (-C / FREQ_L1)
-    l2_phase = l2_phase * (-C / FREQ_L2)
+    l_rate = kwargs.get('l_rate', 1)
+    p_rate = kwargs.get('p_rate', 1)
+
+    new_l1_phase, new_l2_phase, new_l1_psr, new_l2_psr = match_sampling_rate(l1_phase, l2_phase, l1_psr, l2_psr, l_rate, p_rate) # Downsample
+
+    new_l1_phase *= (-C / FREQ_L1)
+    new_l2_phase *= (-C / FREQ_L2)
+
+    if len({len(new_l1_phase), len(new_l2_phase), len(new_l1_psr), len(new_l2_psr)}) != 1:
+        raise Exception("Failed to match sampling rate.")
 
     slip_data = lib.find_cycle_slips(
-        l1_phase.ctypes.data_as(POINTER(c_double)),
-        l2_phase.ctypes.data_as(POINTER(c_double)),
-        l1_psr.ctypes.data_as(POINTER(c_double)),
-        l2_psr.ctypes.data_as(POINTER(c_double)),
-        len(l1_phase)
+        new_l1_phase.ctypes.data_as(POINTER(c_double)),
+        new_l2_phase.ctypes.data_as(POINTER(c_double)),
+        new_l1_psr.ctypes.data_as(POINTER(c_double)),
+        new_l2_psr.ctypes.data_as(POINTER(c_double)),
+        len(new_l1_phase)
     )
 
     arcs = slip_data.get_arcs()
     outliers = slip_data.get_outliers()
 
-    l1_phase[outliers] = np.nan
-    l2_phase[outliers] = np.nan
+    new_l1_phase[outliers] = np.nan
+    new_l2_phase[outliers] = np.nan
 
     prev = 0
     for i in arcs:
@@ -87,26 +143,12 @@ def correct_cycle_slips(
             prev = i['index']
             continue
 
-        l1_phase[prev-1:i['index']] += i['delta_N_w']
-        l2_phase[prev-1:i['index']] += i['delta_N_w']
+        new_l1_phase[prev-1:i['index']] += i['delta_N_w']
+        new_l2_phase[prev-1:i['index']] += i['delta_N_w']
 
         prev = i['index']
 
-    return l1_phase, l2_phase, l1_psr, l2_psr
+    new_l1_phase *= (-FREQ_L1 / C)
+    new_l2_phase *= (-FREQ_L2 / C)
 
-def main():
-    n = 50000
-    a = generate_arr(n - 1)
-    b = generate_arr(n - 1)
-    c = generate_arr(n - 1)
-    d = generate_arr(n - 1)
-    t = np.arange(n)
-    plt.plot(t, a, color='b')
-
-    a, b, c, d = correct_cycle_slips(a, b, c, d)
-
-    plt.plot(t, a, color='r')
-    plt.show()
-
-if __name__ == '__main__':
-    main()
+    return remove_gaps_from_original_l_series(l1_phase, l2_phase, l_rate, p_rate, ~np.isnan(new_l2_phase))
