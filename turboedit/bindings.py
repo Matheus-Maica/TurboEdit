@@ -1,7 +1,6 @@
 from ctypes import *
 import numpy as np
 import os
-import matplotlib.pyplot as plt
 
 np.random.seed(42)
 
@@ -105,8 +104,8 @@ lib.find_cycle_slips.restype = Results
 
 def correct_cycle_slips(
     l1_phase: np.ndarray,
-    l2_phase: np.ndarray, 
-    l1_psr: np.ndarray, 
+    l2_phase: np.ndarray,
+    l1_psr: np.ndarray,
     l2_psr: np.ndarray,
     FREQ_L1: float = 1575.42e6,
     FREQ_L2: float = 1227.60e6,
@@ -115,40 +114,34 @@ def correct_cycle_slips(
     l_rate = kwargs.get('l_rate', 1)
     p_rate = kwargs.get('p_rate', 1)
 
-    new_l1_phase, new_l2_phase, new_l1_psr, new_l2_psr = match_sampling_rate(l1_phase, l2_phase, l1_psr, l2_psr, l_rate, p_rate) # Downsample
+    l1p, l2p, l1r, l2r = match_sampling_rate(l1_phase, l2_phase, l1_psr, l2_psr, l_rate, p_rate) # Downsample
 
-    new_l1_phase *= (-C / FREQ_L1)
-    new_l2_phase *= (-C / FREQ_L2)
+    l1p *= (-C / FREQ_L1)
+    l2p *= (-C / FREQ_L2)
 
-    if len({len(new_l1_phase), len(new_l2_phase), len(new_l1_psr), len(new_l2_psr)}) != 1:
+    if len({len(l1p), len(l2p), len(l1r), len(l2r)}) != 1:
         raise Exception("Failed to match sampling rate.")
 
-    slip_data = lib.find_cycle_slips(
-        new_l1_phase.ctypes.data_as(POINTER(c_double)),
-        new_l2_phase.ctypes.data_as(POINTER(c_double)),
-        new_l1_psr.ctypes.data_as(POINTER(c_double)),
-        new_l2_psr.ctypes.data_as(POINTER(c_double)),
-        len(new_l1_phase)
-    )
+    slip_data = lib.find_cycle_slips(l1p.ctypes.data_as(POINTER(c_double)), l2p.ctypes.data_as(POINTER(c_double)), l1r.ctypes.data_as(POINTER(c_double)), l2r.ctypes.data_as(POINTER(c_double)), len(l1p))
 
     arcs = slip_data.get_arcs()
     outliers = slip_data.get_outliers()
 
-    new_l1_phase[outliers] = np.nan
-    new_l2_phase[outliers] = np.nan
+    l1p[outliers] = np.nan
+    l2p[outliers] = np.nan
 
     prev = 0
     for i in arcs:
-        if not bool(i['isPhaseConnected'][0]):
+        if bool(i['isPhaseConnected'][0]):
             prev = i['index']
             continue
 
-        new_l1_phase[prev-1:i['index']] += i['delta_N_w']
-        new_l2_phase[prev-1:i['index']] += i['delta_N_w']
+        l1p[prev-1:i['index']] += i['delta_N_w']
+        l2p[prev-1:i['index']] += i['delta_N_w']
 
         prev = i['index']
 
-    new_l1_phase *= (-FREQ_L1 / C)
-    new_l2_phase *= (-FREQ_L2 / C)
+    l1p *= (-FREQ_L1 / C)
+    l2p *= (-FREQ_L2 / C)
 
-    return remove_gaps_from_original_l_series(l1_phase, l2_phase, l_rate, p_rate, ~np.isnan(new_l2_phase))
+    return remove_gaps_from_original_l_series(l1_phase, l2_phase, l_rate, p_rate, ~np.isnan(l2p))

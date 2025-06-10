@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "turboedit"
-version = "0.1.7"
+version = "0.1.9"
 description = "Implementation of TurboEdit algorithm for GNSS data"
 authors = [{ name="Matheus Maica", email="matheus.maica@unb.ca" }]
 readme = "README.md"

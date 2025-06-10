@@ -16,7 +16,7 @@
 
 // Wide-lane wavelength
 const double LAMBDA_WL = C / (FREQ_L1 - FREQ_L2);
-const double LAMBDA_WL_INV = (FREQ_L1 - FREQ_L2) / C;
+const double LAMBDA_WL_INV = 1 / LAMBDA_WL;
 
 // L1 and L2 wavelengths
 const double LAMBDA_L1 = C / FREQ_L1;
@@ -35,25 +35,6 @@ typedef struct {
     int outliers_length;
 } WlData; // wide-lane results
 
-void print_list(double* arr, size_t size) {
-    // size_t size = sizeof(arr) / sizeof(arr[0]);
-    printf("arr (size: %zu): [", size);
-    for (size_t i = 0; i < size; ++i) {
-        printf("%.18f", arr[i]);
-        if (i < size - 1)
-            printf(", ");
-    }
-    printf("]\n");
-}
-
-double* copy_array(const double* arr, size_t length) {
-    double* new_array = (double*)malloc(length * sizeof(double));
-
-    cblas_dcopy(length, arr, 1, new_array, 1);
-
-    return new_array;
-}
-
 double* vector_sum(const double* a, const double* b, char coeff, size_t length) { // a + b or a - b
     // coeff = -1 => a - b
     // coeff = 1 => a + b
@@ -69,20 +50,6 @@ double* vector_sum(const double* a, const double* b, char coeff, size_t length) 
     // result = result - b → result = a - b
     // This is done by result += -1.0 * b
     cblas_daxpy(length, coeff, b, 1, result, 1);
-
-    return result;
-}
-
-double* vector_mult(const Vector* a, double alpha) { // a * alpha
-    const size_t length = a->size;
-    double* result = (double*)malloc(length * sizeof(double));
-    if (!result) {
-        fprintf(stderr, "Memory allocation failed\n");
-        exit(EXIT_FAILURE);
-    }
-
-    cblas_dcopy(length, a->data, 1, result, 1);
-    cblas_dscal(length, alpha, result, 1);
 
     return result;
 }
@@ -185,7 +152,7 @@ double* linear_combination(const double* x, const double* y, double a, double b,
     return result;
 }
 
-// Compute wide-lane phase combination in meters
+// Compute wide-lane and ionospheric combinations
 MWPIRComb precompute_combinations(Vector* l1_phase, Vector* l2_phase, Vector* l1_psr, Vector* l2_psr) { // This should receive L1, L2, and NOT carrier phase in cycles.
     const size_t length = l1_phase->size;
 
@@ -347,24 +314,11 @@ Results find_cycle_slips(double* l1_p, double* l2_p, double* l1_r, double* l2_r,
     copy_from_array(l1_psr, l1_r, length);
     copy_from_array(l2_psr, l2_r, length);
 
-    clock_t start = clock();
     MWPIRComb obs = precompute_combinations(l1_phase, l2_phase, l1_psr, l2_psr);
-    clock_t end = clock();
     destroy(l1_phase); destroy(l2_phase); destroy(l1_psr); destroy(l2_psr);
 
-    printf("precompute_combinations took %.2f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
-
-    start = clock();
     WlData widelane_slips = widelane_slip_detection(obs, length);
-    end = clock();
-
-    printf("widelane_slip_detection took %.2f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
-
-    start = clock();
     Vector* iono_slips = ionospheric_splip_detection(obs, length);
-    end = clock();
-
-    printf("ionospheric_splip_detection took %.2f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
 
     Results res = {
         .arcs = widelane_slips.arcs,
